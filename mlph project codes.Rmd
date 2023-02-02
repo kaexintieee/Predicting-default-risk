@@ -1,0 +1,682 @@
+---
+title: "Final project codes"
+author: "Kexin Li"
+date: "09/04/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Packages
+
+```{r}
+library(tidyverse)
+library(gtsummary)
+library(gridExtra)
+library(ROSE)
+library(caret)
+library(randomForest)
+library(plotROC)
+library(tidytext)
+library(dplyr)
+```
+
+# Read Data
+
+```{r}
+data = read_csv('/Users/kexinli/Desktop/UCI_Credit_Card.csv')
+```
+
+# Data Preparation
+
+```{r}
+
+data = data %>% 
+  mutate(SEX = factor(SEX,levels = 1:2,labels = c('male','female')),
+         EDUCATION = ifelse(EDUCATION %in% c(0,5,6),'Unknown',EDUCATION),
+         EDUCATION = factor(EDUCATION),
+         MARRIAGE = ifelse(MARRIAGE %in% c(0,3),3,MARRIAGE),
+         MARRIAGE = factor(MARRIAGE),
+         default.payment.next.month = factor(default.payment.next.month,
+                                             levels = 0:1,
+                                             labels = c('no','yes'))) %>% 
+  rename(default = default.payment.next.month) %>% 
+  dplyr::select(-ID)
+
+
+```
+
+# EDA
+
+```{r}
+data %>% 
+  group_by(default) %>% 
+  summarise(N = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = default,y = N,fill = default)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values=c("cornflowerblue", "burlywood"))+
+  labs(y = 'Frequency',
+       title = 'Bar Plot of Default') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+```{r}
+temp = data %>% 
+  dplyr::select(PAY_0:PAY_6,where(is.factor)) %>% 
+  mutate(PAY_0 = as.factor(PAY_0),
+         PAY_2 = as.factor(PAY_2),
+         PAY_3 = as.factor(PAY_3),
+         PAY_4 = as.factor(PAY_4),
+         PAY_5 = as.factor(PAY_5),
+         PAY_6 = as.factor(PAY_6)) %>% 
+  pivot_longer(cols = -default,
+               names_to = 'variable',
+               values_to = 'value') %>% 
+  group_by(default,variable,value) %>% 
+  summarise(N = n()) %>% 
+  ungroup()
+
+plots = list()
+for(i in 1:length(unique(temp$variable))){
+  p = temp %>% 
+    filter(variable==unique(temp$variable)[i]) %>%
+    ggplot(aes(x = default,y = N,fill = value)) +
+    geom_bar(stat = 'identity',position = 'fill') +
+    labs(x = '',
+         y = '',
+         title = unique(temp$variable)[i]) +
+    scale_fill_viridis_d(direction = -1) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5),
+          text = element_text(face = 'bold'))
+  plots[[i]] = p
+}
+plots[[1]]
+plots[[2]]
+plots[[3]]
+plots[[4]]
+plots[[5]]
+plots[[6]]
+plots[[7]]
+plots[[8]]
+plots[[9]]
+```
+
+```{r}
+data %>% 
+  dplyr::select(-SEX,-EDUCATION,-MARRIAGE,-PAY_0,-PAY_2,-PAY_3,-PAY_4,-PAY_5,-PAY_6) %>% 
+  pivot_longer(cols = -default,
+               names_to = 'variable',
+               values_to = 'value') %>% 
+  ggplot(aes(x = value,y = ..density..,fill = default)) +
+  geom_density(alpha = 0.8)  +
+  labs(x = '',
+       y = '',
+       title = 'Default vs Numerical Variables') +
+  facet_wrap(~variable,scales = 'free') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+
+data %>% 
+  dplyr::select(-SEX,-EDUCATION,-MARRIAGE,-PAY_0,-PAY_2,-PAY_3,-PAY_4,-PAY_5,-PAY_6) %>% 
+  pivot_longer(cols = -default,
+               names_to = 'variable',
+               values_to = 'value') %>% 
+  ggplot(aes(x = value,y = ..density..,fill = default)) +
+  geom_density(alpha = 0.8) +
+  scale_x_log10() +
+  labs(x = '',
+       y = '',
+       title = 'Default vs Numerical Variables') +
+  facet_wrap(~variable,scales = 'free') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+
+# Split Data 
+
+```{r}
+set.seed(123)
+train_id = createDataPartition(y = data$default,p = 0.7,list = F)
+train = data[train_id,]
+test = data[-train_id,]
+```
+
+# Standarize Training Data
+
+```{r}
+train = train %>% 
+  mutate_if(is.numeric,.funs = function(x){(x-mean(x))/sd(x)})
+```
+
+
+# Training Data Balance (Oversampling)
+
+```{r}
+train %>% 
+  group_by(default) %>% 
+  summarise(N = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = default,y = N,fill = default)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values=c("cornflowerblue", "burlywood"))+
+  labs(y = 'Frequency',
+       title = 'Bar Plot of Default (training data)') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+
+
+bal_train = ROSE(default~.,N = 30000,data = train,seed = 123)$data
+
+bal_train %>% 
+  group_by(default) %>% 
+  summarise(N = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = default,y = N,fill = default)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values=c("cornflowerblue", "burlywood"))+
+  labs(y = 'Frequency',
+       title = 'Bar Plot of Default (balanced training data)') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+
+# Model
+
+## Cross-validation
+
+```{r}
+set.seed(123)
+folds = createFolds(y = bal_train$default,k = 5,list = T)
+```
+
+## Logistic Regression
+
+```{r}
+accuracy_Logit = c()
+for(i in 1:length(folds)){
+  validation_id = folds[[i]]
+  temp_train = bal_train[-validation_id,]
+  temp_validation = bal_train[validation_id,]
+  
+  temp_Logit = glm(default~.,
+                   family = binomial(link = 'logit'),
+                   data = temp_train)
+  
+  temp_pre = predict(temp_Logit,temp_validation,type = 'response')
+  temp_pre = ifelse(temp_pre>0.5,levels(bal_train$default)[2],levels(bal_train$default)[1])
+  temp_accuracy = mean(temp_pre==temp_validation$default)
+  accuracy_Logit = c(accuracy_Logit,temp_accuracy)
+}
+Acc_Logit = mean(accuracy_Logit)
+```
+
+```{r}
+cv_Logit = data.frame(Fold = 1:length(accuracy_Logit),
+                      Accuracy = accuracy_Logit)
+
+cv_Logit %>% 
+  ggplot(aes(x = Fold,y = Accuracy)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = cv_Logit$Fold) +
+  labs(y = 'Accuracy',
+       title = 'Accuracy (CV) of Logistic Regression') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+## KNN
+
+```{r}
+cv_KNN = data.frame(k = 2:10,
+                    accuracy = NA)
+for(i in 1:nrow(cv_KNN)){
+  temp_k = cv_KNN$k[i]
+  accuracy_KNN = c()
+  for(j in 1:length(folds)){
+    validation_id = folds[[j]]
+    temp_train = bal_train[-validation_id,]
+    temp_validation = bal_train[validation_id,]
+    set.seed(123)
+    temp_KNN = knn3(formula = default~.,
+                    data = temp_train,
+                    k = temp_k)
+    temp_pre = predict(temp_KNN,temp_validation,type = 'class')
+    temp_accuracy = mean(temp_pre==temp_validation$default)
+    accuracy_KNN = c(accuracy_KNN,temp_accuracy)
+  }
+  cv_KNN$accuracy[i] = mean(accuracy_KNN)
+}
+
+best_k = cv_KNN$k[which.max(cv_KNN$accuracy)]
+```
+
+```{r}
+cv_KNN %>% 
+  ggplot(aes(x = k,y = accuracy)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = cv_KNN$k) +
+  labs(y = 'Accurary',
+       title = 'Accuracy (CV) of KNN') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+## Random Forest
+
+```{r}
+cv_RF = expand.grid(mtry = 1:10,
+                    ntree = seq(100,500,100),
+                    accuracy = NA)
+for(i in 1:nrow(cv_RF)){
+  temp_mtry = cv_RF$mtry[i]
+  temp_ntree = cv_RF$ntree[i]
+  accuracy_RF = c()
+  for(j in 1:length(folds)){
+    validation_id = folds[[j]]
+    temp_train = bal_train[-validation_id,]
+    temp_validation = bal_train[validation_id,]
+    set.seed(123)
+    temp_RF = randomForest(formula = default~.,
+                           data = temp_train,
+                           mtry = temp_mtry,
+                           ntree = temp_ntree)
+    temp_pre = predict(temp_RF,temp_validation,type = 'class')
+    temp_accuracy = mean(temp_pre==temp_validation$default)
+    accuracy_RF = c(accuracy_RF,temp_accuracy)
+  }
+  cv_RF$accuracy[i] = mean(accuracy_RF)
+}
+
+best_mtry = cv_RF$mtry[which.max(cv_RF$accuracy)]
+best_ntree = cv_RF$ntree[which.max(cv_RF$accuracy)]
+```
+
+```{r}
+cv_RF %>% 
+  ggplot(aes(x = mtry,y = ntree,fill = accuracy)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(fill = 'Accuracy',
+       title = 'Accuracy (CV) of Random Forest') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+
+```
+
+# Standarize Test Data
+
+```{r}
+test = test %>% 
+  mutate_if(is.numeric,.funs = function(x){(x-mean(x))/sd(x)})
+```
+
+
+# Prediction
+
+```{r}
+set.seed(123)
+best_Logit = glm(formula = default~.,
+                 data = bal_train,
+                 family = binomial(link = 'logit'))
+prob_Logit = predict(best_Logit,test,type = 'response')
+pre_Logit = ifelse(prob_Logit>0.5,
+                   levels(data$default)[2],
+                   levels(data$default)[1])
+table(predict = pre_Logit,
+      label = test$default)
+```
+
+```{r}
+set.seed(123)
+best_KNN = knn3(formula = default~.,
+                data = bal_train,
+                k = best_k)
+prob_KNN = predict(best_KNN,test,type = 'prob')
+pre_KNN = predict(best_KNN,test,type = 'class')
+table(predict = pre_KNN,
+      label = test$default)
+```
+
+```{r}
+set.seed(123)
+best_RF = randomForest(formula = default~.,
+                       data = bal_train,
+                       mtry = best_mtry,
+                       ntree = best_ntree)
+prob_RF = predict(best_RF,test,type = 'prob')
+pre_RF = predict(best_RF,test,type = 'class')
+table(predict = pre_RF,
+      label = test$default)
+```
+
+# Model Evaluation
+
+```{r}
+prob = data.frame(label = test$default,
+                  Logit = prob_Logit,
+                  KNN = prob_KNN[,2],
+                  RF = prob_RF[,2])
+roc = prob %>% 
+  pivot_longer(cols = -label,
+               names_to = 'model',
+               values_to = 'prob') %>% 
+  mutate(model = factor(model,levels = c('Logit','KNN','RF'))) %>% 
+  ggplot(aes(d = label,m = prob,color = model)) +
+  geom_roc() +
+  geom_abline() +
+  labs(x = '1-Specificity',
+       y = 'Sensitivity',
+       title = 'ROC for Different Models') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+roc
+
+calc_auc(roc) %>% 
+  mutate(Model = unique(roc$data$model)) %>% 
+  dplyr::select(Model,AUC) %>% 
+  arrange(desc(AUC))
+```
+
+```{r}
+prediction = data.frame(label = test$default,
+                        Logit = pre_Logit,
+                        KNN = pre_KNN,
+                        RF = pre_RF)
+
+metric = prediction %>% 
+  pivot_longer(cols = -label,
+               names_to = 'model',
+               values_to = 'prediction') %>% 
+  group_by(model) %>% 
+  summarise(Accuracy = mean(label==prediction),
+            Precision = sum(label==levels(test$default)[2] & prediction==levels(test$default)[2])/sum(prediction==levels(test$default)[2]),
+            Recall = sum(label==levels(test$default)[2] & prediction==levels(test$default)[2])/sum(label==levels(test$default)[2]),
+            F1 = 2*Precision*Recall/(Precision+Recall))
+
+metric %>% 
+  pivot_longer(cols = -model,
+               names_to = 'Metric',
+               values_to = 'Value') %>% 
+  mutate(model = reorder_within(model,Value,Metric)) %>% 
+  ggplot(aes(x = model,y = Value)) +
+  geom_bar(stat = 'identity',fill="cornflowerblue") +
+  scale_x_reordered() +
+  labs(x = '',
+       y = '',
+       title = 'Model Evaluation') +
+  coord_flip() +
+  facet_wrap(~Metric,scales = 'free') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+
+# Training Data Balance (Undersampling)
+
+```{r}
+unsam_train <- ovun.sample(default~. ,
+                               data = train,
+                               method = "under")$data
+
+
+unsam_train %>% 
+  group_by(default) %>% 
+  summarise(N = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = default,y = N,fill = default)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values=c("cornflowerblue", "burlywood"))+
+  labs(y = 'Frequency',
+       title = 'Bar Plot of Default (balanced training data)') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+```
+
+# Model
+
+## Cross-validation
+```{r}
+set.seed(123)
+folds = createFolds(y = unsam_train$default,k = 5,list = T)
+```
+
+## Logistic Regression
+```{r}
+accuracy_Logit = c()
+for(i in 1:length(folds)){
+  validation_id = folds[[i]]
+  temp_train = unsam_train[-validation_id,]
+  temp_validation = unsam_train[validation_id,]
+  
+  temp_Logit = glm(default~.,
+                   family = binomial(link = 'logit'),
+                   data = temp_train)
+  
+  temp_pre = predict(temp_Logit,temp_validation,type = 'response')
+  temp_pre = ifelse(temp_pre>0.5,levels(unsam_train$default)[2],levels(unsam_train$default)[1])
+  temp_accuracy = mean(temp_pre==temp_validation$default)
+  accuracy_Logit = c(accuracy_Logit,temp_accuracy)
+}
+Acc_Logit = mean(accuracy_Logit)
+
+cv_Logit = data.frame(Fold = 1:length(accuracy_Logit),
+                      Accuracy = accuracy_Logit)
+
+cv_Logit %>% 
+  ggplot(aes(x = Fold,y = Accuracy)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = cv_Logit$Fold) +
+  labs(y = 'Accuracy',
+       title = 'Accuracy (CV) of Logistic Regression') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+```
+
+
+## KNN
+
+```{r}
+cv_KNN = data.frame(k = 2:10,
+                    accuracy = NA)
+for(i in 1:nrow(cv_KNN)){
+  temp_k = cv_KNN$k[i]
+  accuracy_KNN = c()
+  for(j in 1:length(folds)){
+    validation_id = folds[[j]]
+    temp_train = unsam_train[-validation_id,]
+    temp_validation = unsam_train[validation_id,]
+    set.seed(123)
+    temp_KNN = knn3(formula = default~.,
+                    data = temp_train,
+                    k = temp_k)
+    temp_pre = predict(temp_KNN,temp_validation,type = 'class')
+    temp_accuracy = mean(temp_pre==temp_validation$default)
+    accuracy_KNN = c(accuracy_KNN,temp_accuracy)
+  }
+  cv_KNN$accuracy[i] = mean(accuracy_KNN)
+}
+
+best_k = cv_KNN$k[which.max(cv_KNN$accuracy)]
+
+cv_KNN %>% 
+  ggplot(aes(x = k,y = accuracy)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = cv_KNN$k) +
+  labs(y = 'Accurary',
+       title = 'Accuracy (CV) of KNN') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+```
+
+## Random Forest
+
+```{r}
+cv_RF = expand.grid(mtry = 1:10,
+                    ntree = seq(100,500,100),
+                    accuracy = NA)
+for(i in 1:nrow(cv_RF)){
+  temp_mtry = cv_RF$mtry[i]
+  temp_ntree = cv_RF$ntree[i]
+  accuracy_RF = c()
+  for(j in 1:length(folds)){
+    validation_id = folds[[j]]
+    temp_train = unsam_train[-validation_id,]
+    temp_validation = unsam_train[validation_id,]
+    set.seed(123)
+    temp_RF = randomForest(formula = default~.,
+                           data = temp_train,
+                           mtry = temp_mtry,
+                           ntree = temp_ntree)
+    temp_pre = predict(temp_RF,temp_validation,type = 'class')
+    temp_accuracy = mean(temp_pre==temp_validation$default)
+    accuracy_RF = c(accuracy_RF,temp_accuracy)
+  }
+  cv_RF$accuracy[i] = mean(accuracy_RF)
+}
+
+best_mtry = cv_RF$mtry[which.max(cv_RF$accuracy)]
+best_ntree = cv_RF$ntree[which.max(cv_RF$accuracy)]
+
+cv_RF %>% 
+  ggplot(aes(x = mtry,y = ntree,fill = accuracy)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(fill = 'Accuracy',
+       title = 'Accuracy (CV) of Random Forest') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+```
+
+# Prediction
+
+```{r}
+set.seed(123)
+best_Logit = glm(formula = default~.,
+                 data = unsam_train,
+                 family = binomial(link = 'logit'))
+prob_Logit = predict(best_Logit,test,type = 'response')
+pre_Logit = ifelse(prob_Logit>0.5,
+                   levels(data$default)[2],
+                   levels(data$default)[1])
+table(predict = pre_Logit,
+      label = test$default)
+
+set.seed(123)
+best_KNN = knn3(formula = default~.,
+                data = unsam_train,
+                k = best_k)
+prob_KNN = predict(best_KNN,test,type = 'prob')
+pre_KNN = predict(best_KNN,test,type = 'class')
+table(predict = pre_KNN,
+      label = test$default)
+
+set.seed(123)
+best_RF = randomForest(formula = default~.,
+                       data = unsam_train,
+                       mtry = best_mtry,
+                       ntree = best_ntree)
+prob_RF = predict(best_RF,test,type = 'prob')
+pre_RF = predict(best_RF,test,type = 'class')
+table(predict = pre_RF,
+      label = test$default)
+```
+
+# Model Evaluation
+```{r}
+prob = data.frame(label = test$default,
+                  Logit = prob_Logit,
+                  KNN = prob_KNN[,2],
+                  RF = prob_RF[,2])
+roc = prob %>% 
+  pivot_longer(cols = -label,
+               names_to = 'model',
+               values_to = 'prob') %>% 
+  mutate(model = factor(model,levels = c('Logit','KNN','RF'))) %>% 
+  ggplot(aes(d = label,m = prob,color = model)) +
+  geom_roc() +
+  geom_abline() +
+  labs(x = '1-Specificity',
+       y = 'Sensitivity',
+       title = 'ROC for Different Models (Undersampling)') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+roc
+
+calc_auc(roc) %>% 
+  mutate(Model = unique(roc$data$model)) %>% 
+  dplyr::select(Model,AUC) %>% 
+  arrange(desc(AUC))
+
+
+prediction = data.frame(label = test$default,
+                        Logit = pre_Logit,
+                        KNN = pre_KNN,
+                        RF = pre_RF)
+
+metric = prediction %>% 
+  pivot_longer(cols = -label,
+               names_to = 'model',
+               values_to = 'prediction') %>% 
+  group_by(model) %>% 
+  summarise(Accuracy = mean(label==prediction),
+            Precision = sum(label==levels(test$default)[2] & prediction==levels(test$default)[2])/sum(prediction==levels(test$default)[2]),
+            Recall = sum(label==levels(test$default)[2] & prediction==levels(test$default)[2])/sum(label==levels(test$default)[2]),
+            F1 = 2*Precision*Recall/(Precision+Recall))
+
+metric %>% 
+  pivot_longer(cols = -model,
+               names_to = 'Metric',
+               values_to = 'Value') %>% 
+  mutate(model = reorder_within(model,Value,Metric)) %>% 
+  ggplot(aes(x = model,y = Value)) +
+  geom_bar(stat = 'identity',fill="steelblue") +
+  scale_x_reordered() +
+  labs(x = '',
+       y = '',
+       title = 'Model Evaluation (Undersampling)') +
+  coord_flip() +
+  facet_wrap(~Metric,scales = 'free') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(face = 'bold'))
+
+```
+
+
+
+
+
